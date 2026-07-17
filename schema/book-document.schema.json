@@ -1,0 +1,133 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ominira.dev/schema/book-document.schema.json",
+  "title": "BookDocument",
+  "description": "Canonical shape for an ingested book — the single hand-written source of truth. lib/book/schema.ts (Zod) is generated from this file via json-schema-to-zod; /ingestion (Python) validates against this file directly via jsonschema. Do not hand-edit either of those; edit this file. See ingestion.md.",
+  "type": "object",
+  "required": ["schemaVersion", "id", "slug", "metadata", "narrators", "sections", "spine"],
+  "properties": {
+    "schemaVersion": { "const": 3 },
+    "id": { "type": "string" },
+    "slug": { "type": "string" },
+    "metadata": { "$ref": "#/$defs/BookMetadata" },
+    "narrators": { "type": "array", "items": { "$ref": "#/$defs/Narrator" } },
+    "sections": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/Section" },
+      "description": "Content-first, chapter-agnostic tree mirroring the EPUB's own nav structure (arbitrary depth — not hardcoded to Part>Chapter). Top-level array follows spine order; a section with no nav entry of its own (front/back matter the publisher didn't list in the TOC) still appears here as a top-level leaf, classified by `kind` from EPUB landmarks/guide rather than guessed from its content."
+    },
+    "spine": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Flat, ordered list of ids of every section that has its own passages (i.e. every leaf with real reading content), in true linear reading order. This — not array position in `sections`, which mixes in grouping-only nodes like a Part header — is what next/prev navigation, pagination, and audio continuity are keyed to."
+    },
+    "notes": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/Note" },
+      "default": [],
+      "description": "Flat list of footnote/endnote bodies, referenced by Mark.noteId."
+    }
+  },
+  "$defs": {
+    "BookMetadata": {
+      "type": "object",
+      "required": ["title", "author", "description", "cover", "language", "pageCountEstimate"],
+      "properties": {
+        "title": { "type": "string" },
+        "author": { "type": "string" },
+        "description": { "type": "string" },
+        "cover": { "type": "string" },
+        "language": { "type": "string" },
+        "publishedYear": { "type": "integer" },
+        "pageCountEstimate": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "Narrator": {
+      "type": "object",
+      "required": ["id", "name"],
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "avatar": { "type": "string" }
+      }
+    },
+    "Note": {
+      "type": "object",
+      "description": "A footnote/endnote body. sectionId ties it to the section it belongs to, whether the source EPUB renders notes inline per-section or gathered in one end-of-book section.",
+      "required": ["id", "sectionId", "marker", "text"],
+      "properties": {
+        "id": { "type": "string" },
+        "sectionId": { "type": "string" },
+        "marker": { "type": "string", "description": "Visible reference glyph, e.g. \"1\" or \"*\"." },
+        "text": { "type": "string" }
+      }
+    },
+    "Mark": {
+      "type": "object",
+      "required": ["start", "end", "kind"],
+      "properties": {
+        "start": { "type": "integer", "minimum": 0 },
+        "end": { "type": "integer", "minimum": 0 },
+        "kind": { "enum": ["em", "strong", "note"] },
+        "noteId": { "type": "string", "description": "Set iff kind == \"note\"; references Note.id." }
+      }
+    },
+    "Passage": {
+      "type": "object",
+      "required": ["id", "index", "type", "text"],
+      "properties": {
+        "id": { "type": "string" },
+        "index": { "type": "integer", "minimum": 0 },
+        "type": { "enum": ["paragraph", "heading", "blockquote", "image"] },
+        "text": { "type": "string", "description": "Body text, or alt text when type == \"image\"." },
+        "level": { "type": "integer", "minimum": 1, "maximum": 6, "description": "Set iff type == \"heading\": the source h1-h6 depth, so the reader can render each distinctly instead of one uniform heading style." },
+        "marks": { "type": "array", "items": { "$ref": "#/$defs/Mark" } },
+        "src": { "type": "string", "description": "Set iff type == \"image\": public path to the extracted asset." },
+        "caption": { "type": "string", "description": "Set iff type == \"image\"." }
+      }
+    },
+    "NarratorTrack": {
+      "type": "object",
+      "required": ["narratorId", "src", "durationMs"],
+      "properties": {
+        "narratorId": { "type": "string" },
+        "src": { "type": "string" },
+        "durationMs": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "WordTiming": {
+      "type": "object",
+      "required": ["passageId", "text", "startMs", "endMs"],
+      "properties": {
+        "passageId": { "type": "string" },
+        "text": { "type": "string" },
+        "startMs": { "type": "integer", "minimum": 0 },
+        "endMs": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "SectionAudio": {
+      "type": "object",
+      "required": ["narratorTracks"],
+      "properties": {
+        "narratorTracks": { "type": "array", "items": { "$ref": "#/$defs/NarratorTrack" } },
+        "words": { "type": "array", "items": { "$ref": "#/$defs/WordTiming" } }
+      }
+    },
+    "Section": {
+      "type": "object",
+      "description": "A node in the book's content tree — a chapter, a part grouping several chapters, a front/back-matter page, or any nesting depth the source EPUB's own nav actually has. There is no separate 'Chapter' or 'Part' type: a chapter is just a Section with passages and no children; a part is just a Section with children and (usually) no passages of its own. No synthetic numbering is added here — `title` is the nav's own text verbatim, or absent if this section isn't listed in the nav and no confident title exists (never guessed from a heading found inside its body, which was the source of nonsense titles like a Table-of-Contents page's own listing text being mistaken for a chapter title).",
+      "required": ["id", "kind", "passages", "children"],
+      "properties": {
+        "id": { "type": "string" },
+        "title": { "type": "string" },
+        "kind": {
+          "enum": ["front", "body", "back", "unknown"],
+          "description": "From EPUB3 landmarks (epub:type) or EPUB2 <guide><reference type>; \"unknown\" when the source EPUB provides no such classification and this section also isn't reachable from the nav TOC."
+        },
+        "passages": { "type": "array", "items": { "$ref": "#/$defs/Passage" } },
+        "children": { "type": "array", "items": { "$ref": "#/$defs/Section" } },
+        "audio": { "$ref": "#/$defs/SectionAudio" }
+      }
+    }
+  }
+}
