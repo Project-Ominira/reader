@@ -9,8 +9,6 @@ import { persist } from "zustand/middleware";
 // addition, not a rename.
 export type Theme = "light" | "dark";
 
-export type ReaderMode = "read" | "listen";
-
 // Font size, line spacing, and content width are all exposed as the same
 // plain 10-100 scale (step 10) instead of three different named-option
 // steppers/glyphs — a "40" or "70" between - and + reads the same way
@@ -123,15 +121,6 @@ type ReaderState = {
   lineSpacingScale: number;
   contentWidthScale: number;
 
-  // Session/position state — not persisted here. Resume position is
-  // per-book (position-store), so this just holds whatever section the
-  // current session is looking at; null means "not yet resolved" and the
-  // Reader falls back to the book's own first spine entry.
-  mode: ReaderMode;
-  currentSectionId: string | null;
-
-  setMode: (mode: ReaderMode) => void;
-  setCurrentSectionId: (id: string) => void;
   setFontSizeScale: (n: number) => void;
   setFontFamily: (f: FontFamily) => void;
   setTheme: (t: Theme) => void;
@@ -145,13 +134,6 @@ export const useReaderStore = create<ReaderState>()(
     (set) => ({
       ...READER_PREF_DEFAULTS,
 
-      mode: "read",
-      // Resolved by the Reader on mount from position-store's per-book
-      // resume position, falling back to book.spine[0] (reader-issues #2).
-      currentSectionId: null,
-
-      setMode: (mode) => set({ mode }),
-      setCurrentSectionId: (currentSectionId) => set({ currentSectionId }),
       setFontSizeScale: (n) => set({ fontSizeScale: clampScale(n) }),
       setFontFamily: (fontFamily) => set({ fontFamily }),
       setTheme: (theme) => set({ theme }),

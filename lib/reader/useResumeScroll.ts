@@ -1,15 +1,15 @@
 import { useEffect, useRef } from "react";
 import type { BookDocument, Section } from "@/lib/book/schema";
-import { useReaderStore } from "@/stores/reader-store";
-import { usePositionStore } from "@/stores/position-store";
+import { useLibraryStore } from "@/stores/library-store";
 
 /**
- * Resumes a book where the reader last left off. Seeds this session's audio
- * position from the saved position (reader-issues #2) once per book, not a
- * general sync, so it doesn't fight ordinary sidebar navigation afterward.
- * Then, once the carousel's slides have mounted, jumps straight to the
- * resume section (no transition — the reader never asked for this move
- * visually) and scrolls to the saved passage within that slide.
+ * Resumes a book where the reader last left off. Once the carousel's slides
+ * have mounted, jumps straight to the saved section (no transition — the
+ * reader never asked for this move visually) and scrolls to the saved
+ * passage within that slide. The saved position itself (which section
+ * narration/audio considers "current") lives in library-store and needs no
+ * separate seeding here — useReaderNarration reads the same per-book
+ * position directly.
  */
 export function useResumeScroll({
   book,
@@ -24,15 +24,8 @@ export function useResumeScroll({
   goTo: (index: number, opts?: { animate?: boolean }) => void;
   getSlideEl: (id: string) => HTMLDivElement | undefined;
 }) {
-  const setAudioSectionId = useReaderStore((s) => s.setCurrentSectionId);
-  const getPosition = usePositionStore((s) => s.getPosition);
+  const getPosition = useLibraryStore((s) => s.getPosition);
   const hasScrolledToResumeRef = useRef(false);
-
-  useEffect(() => {
-    const stored = getPosition(book.id);
-    if (stored) setAudioSectionId(stored.sectionId);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [book.id]);
 
   useEffect(() => {
     if (hasScrolledToResumeRef.current) return;

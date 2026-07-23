@@ -36,6 +36,13 @@ export default function RootLayout({
   return (
     <html
       lang="en"
+      // Some browser extensions (password managers, form-fill tools, etc.)
+      // inject their own attributes onto <html> before React hydrates —
+      // e.g. a stray data-qb-installed. That's an external DOM mutation,
+      // not a real client/server mismatch in this app's own markup, so it's
+      // suppressed here rather than chased as a bug (per React's own
+      // hydration-mismatch guidance).
+      suppressHydrationWarning
       className={`${sourceSerif.variable} ${manrope.variable} ${literata.variable} h-full antialiased`}
     >
       <body className="min-h-full flex flex-col font-sans">{children}</body>

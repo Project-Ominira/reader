@@ -1,15 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import {
-  Check,
-  Pause,
-  Play,
-  RotateCcw,
-  RotateCw,
-  User,
-  X,
-} from "lucide-react";
+import { Check, Pause, Play, RotateCcw, RotateCw, User, X } from "lucide-react";
 import { useAudioStore } from "@/stores/audio-store";
 import { formatDuration } from "@/utils/text";
 import type { NarratorOption } from "@/lib/reader/useReaderNarration";
@@ -21,6 +13,10 @@ type Props = {
   bookTitle: string;
   chapterLabel: string;
   coverSrc: string;
+  /** Only the first entry is ever narrated (per product decision — one
+   * narration per book for now); kept as an array rather than a single
+   * value since `book.narrators`/`narratorTracks` stay array-shaped in the
+   * schema for when multi-narrator selection is re-enabled. */
   narrators: NarratorOption[];
   durationMs: number;
   /** Routes through the caller instead of the store's seekTo directly — for
@@ -30,7 +26,7 @@ type Props = {
    * this component never has to branch on where the audio is coming from. */
   onSeek: (ms: number) => void;
   /** Exits listen mode entirely (distinct from pause) — resume position is
-   * left untouched in position-store, so reopening the player later picks
+   * left untouched in library-store, so reopening the player later picks
    * up where playback left off instead of restarting. */
   onClose?: () => void;
 };
@@ -48,13 +44,10 @@ export default function AudioPlayer({
   const isMini = variant === "mini";
   const isPlaying = useAudioStore((s) => s.isPlaying);
   const currentTimeMs = useAudioStore((s) => s.currentTimeMs);
-  const narratorId = useAudioStore((s) => s.narratorId);
   const speed = useAudioStore((s) => s.speed);
   const toggle = useAudioStore((s) => s.toggle);
-  const setNarratorId = useAudioStore((s) => s.setNarratorId);
   const setSpeed = useAudioStore((s) => s.setSpeed);
 
-  const [narratorMenuOpen, setNarratorMenuOpen] = useState(false);
   const [speedMenuOpen, setSpeedMenuOpen] = useState(false);
   const [isMobile, setIsMobile] = useState(false);
 
@@ -70,7 +63,7 @@ export default function AudioPlayer({
   const progress = duration > 0 ? time / duration : 0;
   const withHours = duration >= 3600;
 
-  const selectedNarrator = narrators.find((n) => n.id === narratorId) ?? narrators[0];
+  const selectedNarrator = narrators[0];
 
   const onScrub = (e: React.MouseEvent<HTMLDivElement>) => {
     const rect = e.currentTarget.getBoundingClientRect();
@@ -163,10 +156,7 @@ export default function AudioPlayer({
 
         {!isMobile && (
           <div className="flex items-center justify-end min-w-0 flex-1">
-            <button
-              onClick={() => setNarratorMenuOpen((o) => !o)}
-              className="flex items-center gap-2 bg-transparent border-none cursor-pointer min-w-0"
-            >
+            <div className="flex items-center gap-2 min-w-0">
               <span className="text-xs text-[var(--reader-text-muted)] whitespace-nowrap overflow-hidden text-ellipsis">
                 Read by{" "}
                 <span className="font-semibold text-[var(--reader-text)]">
@@ -185,62 +175,8 @@ export default function AudioPlayer({
                   <User size={14} className="text-[var(--reader-text-muted)]" />
                 )}
               </div>
-            </button>
-          </div>
-        )}
-
-        {narratorMenuOpen && (
-          <>
-            <div
-              onClick={() => setNarratorMenuOpen(false)}
-              className="fixed inset-0 bg-black/20 z-19"
-            />
-            <div className="absolute bottom-[calc(100%+8px)] right-4 w-72 bg-[var(--reader-surface)] border border-[var(--reader-border)] rounded-md shadow-lg p-3.5 z-20">
-              <div className="flex items-center justify-between mb-3">
-                <span className="text-sm font-semibold text-[var(--reader-text)]">Voices</span>
-                <span
-                  onClick={() => setNarratorMenuOpen(false)}
-                  className="cursor-pointer text-[var(--reader-text-muted)]"
-                >
-                  <X size={16} />
-                </span>
-              </div>
-              <div className="flex flex-col gap-0.5 max-h-80 overflow-y-auto">
-                {narrators.map((n) => {
-                  const active = n.id === narratorId;
-                  return (
-                    <div
-                      key={n.id}
-                      onClick={() => {
-                        setNarratorId(n.id);
-                        setNarratorMenuOpen(false);
-                      }}
-                      className={`flex items-center gap-2.5 py-2 px-2 rounded-sm cursor-pointer ${
-                        active ? "bg-[var(--reader-surface-hover)]" : ""
-                      }`}
-                    >
-                      <div className="w-8 h-8 rounded-full bg-[var(--reader-surface-hover)] flex items-center justify-center flex-none">
-                        {n.avatar ? (
-                          // eslint-disable-next-line @next/next/no-img-element -- narrator avatar, not an app asset
-                          <img
-                            src={n.avatar}
-                            alt={n.name}
-                            className="w-full h-full object-cover rounded-full"
-                          />
-                        ) : (
-                          <User size={15} className="text-[var(--reader-text-muted)]" />
-                        )}
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <div className="text-sm text-[var(--reader-text)] truncate">{n.name}</div>
-                      </div>
-                      {active && <Check size={16} className="text-brand-500 flex-none" />}
-                    </div>
-                  );
-                })}
-              </div>
             </div>
-          </>
+          </div>
         )}
 
         {speedMenuOpen && (

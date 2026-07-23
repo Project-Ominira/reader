@@ -5,7 +5,6 @@ import AudioPlayer from "./AudioPlayer";
 import NotesSidebar from "./NotesSidebar";
 import SearchModal from "./SearchModal";
 import FootnotePopover from "./FootnotePopover";
-import StylePanel from "./StylePanel";
 import type { NoteLookup } from "./PassageContent";
 import BookContent from "./reader/BookContent";
 import ReaderHeader from "./reader/ReaderHeader";
@@ -20,60 +19,64 @@ import {
   lineHeightFromScale,
   useReaderStore,
 } from "@/stores/reader-store";
-import { useHighlightsStore } from "@/stores/highlights-store";
+import { useLibraryStore } from "@/stores/library-store";
 import { useAudioStore } from "@/stores/audio-store";
-import { usePositionStore } from "@/stores/position-store";
+import { useReaderIdentityStore } from "@/stores/reader-identity-store";
 import { useReaderNarration } from "@/lib/reader/useReaderNarration";
 import { useSectionCarousel } from "@/lib/reader/useSectionCarousel";
 import { useResumeScroll } from "@/lib/reader/useResumeScroll";
+import { useReadingProgress } from "@/lib/reader/useReadingProgress";
+import { useTextAnnotations } from "@/lib/reader/useTextAnnotations";
 import { sectionLabel } from "@/lib/reader/sectionHeading";
 
 export default function Reader({ book }: { book: BookDocument }) {
-  const [typographyOpen, setTypographyOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
-  const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [sidebarMode, setSidebarMode] = useState<"thread" | "add">("thread");
-  const [activePassageId, setActivePassageId] = useState<string | null>(null);
-  const [selMenu, setSelMenu] = useState<{ open: boolean; top: number; left: number }>({
-    open: false,
-    top: 0,
-    left: 0,
-  });
   const [copyLabel, setCopyLabel] = useState("Copy");
   const [chaptersOpen, setChaptersOpen] = useState(false);
   const [noteOpen, setNoteOpen] = useState<{ note: NoteLookup; top: number; left: number } | null>(
     null
   );
-  // Anchors the Style popover to the rail's Aa button, via the same
-  // getBoundingClientRect-off-the-trigger pattern onNoteClick below already
-  // uses for FootnotePopover.
-  const [stylePanelPos, setStylePanelPos] = useState({ top: 0, left: 0 });
-
   const playerContainerRef = useRef<HTMLDivElement>(null);
 
-  const mode = useReaderStore((s) => s.mode);
-  const setMode = useReaderStore((s) => s.setMode);
+  const {
+    getForPassage: getAnnotations,
+    selection,
+    notesPanel,
+    onTextSelect,
+    dismissSelection,
+    highlightSelection,
+    noteFromSelection,
+    onNoteMarkerClick,
+    onOpenPassageNotes,
+    onEditAnnotation,
+    closeNotesPanel,
+  } = useTextAnnotations(book.id);
+
+  const mode = useLibraryStore((s) => s.books[book.id]?.mode ?? "read");
+  const setLibraryMode = useLibraryStore((s) => s.setMode);
+  const setMode = useCallback((m: "read" | "listen") => setLibraryMode(book.id, m), [setLibraryMode, book.id]);
   const theme = useReaderStore((s) => s.theme);
+  const setTheme = useReaderStore((s) => s.setTheme);
   const fontSizeScale = useReaderStore((s) => s.fontSizeScale);
   const fontFamily = useReaderStore((s) => s.fontFamily);
   const lineSpacingScale = useReaderStore((s) => s.lineSpacingScale);
   const contentWidthScale = useReaderStore((s) => s.contentWidthScale);
 
-  const isHighlighted = useHighlightsStore((s) => s.isHighlighted);
-  const toggleHighlight = useHighlightsStore((s) => s.toggle);
-
   const audioPlaying = useAudioStore((s) => s.isPlaying);
   const audioToggle = useAudioStore((s) => s.toggle);
   const audioPause = useAudioStore((s) => s.pause);
 
-  // These three stores skip automatic persist hydration (see their own
-  // comments) specifically so the server and the client's first paint
-  // render identical output — pulling in the real localStorage values here,
-  // once, right after mount, is what actually restores them.
+  // These stores skip automatic persist hydration (see their own comments)
+  // specifically so the server and the client's first paint render
+  // identical output — pulling in the real localStorage values here, once,
+  // right after mount, is what actually restores them. reader-identity-
+  // store's rehydrate must land before ensureReaderId, so a returning
+  // reader's existing id is reused rather than shadowed by a fresh one.
   useEffect(() => {
     useReaderStore.persist.rehydrate();
-    useHighlightsStore.persist.rehydrate();
-    usePositionStore.persist.rehydrate();
+    useLibraryStore.persist.rehydrate();
+    useReaderIdentityStore.persist.rehydrate();
+    useReaderIdentityStore.getState().ensureReaderId();
   }, []);
 
   const fontSize = fontSizePxFromScale(fontSizeScale);
@@ -167,7 +170,7 @@ export default function Reader({ book }: { book: BookDocument }) {
   // carousel's own keyboard/swipe handling, so typing in search or
   // arrow-keying through a picker never turns the page underneath.
   const navDisabled =
-    searchOpen || chaptersOpen || sidebarOpen || typographyOpen || Boolean(noteOpen) || selMenu.open;
+    searchOpen || chaptersOpen || Boolean(notesPanel) || Boolean(noteOpen) || Boolean(selection);
 
   const {
     activeIndex,
@@ -192,8 +195,8 @@ export default function Reader({ book }: { book: BookDocument }) {
     // rather than leaving a stale menu floating in place. A page turn can
     // move the reader to a new slide with zero scroll events, so it gets
     // its own dismissal trigger (onNavigate) rather than relying on scroll.
-    onScroll: () => setSelMenu((s) => (s.open ? { ...s, open: false } : s)),
-    onNavigate: () => setSelMenu((s) => (s.open ? { ...s, open: false } : s)),
+    onScroll: dismissSelection,
+    onNavigate: dismissSelection,
     disabled: navDisabled,
   });
 
@@ -202,6 +205,21 @@ export default function Reader({ book }: { book: BookDocument }) {
     sectionsById,
     orderedSections,
     goTo,
+    getSlideEl,
+  });
+
+  // Plain reading (no audio) had no position-save path at all — only
+  // useReaderNarration's listen-mode effects ever called setPosition, so
+  // leaving a book mid-chapter while just reading never persisted anything
+  // finer than "which section," and resuming always dropped the reader
+  // back at the chapter's first passage. This tracks scroll position
+  // within the active section instead (skipping entirely while isListen,
+  // which keeps owning its own audio-offset-aware writes).
+  useReadingProgress({
+    book,
+    mode,
+    activeSectionId,
+    activeSection: sectionsById.get(activeSectionId),
     getSlideEl,
   });
 
@@ -234,9 +252,10 @@ export default function Reader({ book }: { book: BookDocument }) {
   const activeSectionForSidebar = activeSectionId ?? book.spine[0];
   const currentSection = orderedSections[activeIndex];
   const currentSectionLabel = currentSection ? sectionLabel(currentSection) : null;
-  const activePassage =
-    (activePassageId ? passageLookup.byId.get(activePassageId) : undefined) ??
-    orderedSections[0]?.passages[0];
+  const getPassageText = useCallback(
+    (passageId: string) => passageLookup.byId.get(passageId)?.text ?? "",
+    [passageLookup]
+  );
 
   const onNoteClick = useCallback((note: NoteLookup, target: HTMLElement) => {
     const rect = target.getBoundingClientRect();
@@ -247,19 +266,11 @@ export default function Reader({ book }: { book: BookDocument }) {
     });
   }, []);
 
-  const onTextSelect = useCallback((passageId: string) => {
-    const sel = window.getSelection();
-    if (!sel || sel.isCollapsed || !sel.toString().trim()) return;
-    const rect = sel.getRangeAt(0).getBoundingClientRect();
-    setActivePassageId(passageId);
-    setSelMenu({ open: true, top: Math.max(8, rect.top - 48), left: rect.left });
-  }, []);
-
   const menuCopy = () => {
     setCopyLabel("Copied ✓");
     setTimeout(() => {
       setCopyLabel("Copy");
-      setSelMenu((s) => ({ ...s, open: false }));
+      dismissSelection();
     }, 800);
   };
 
@@ -296,14 +307,8 @@ export default function Reader({ book }: { book: BookDocument }) {
           onToggleMode={() => setMode(mode === "read" ? "listen" : "read")}
           onDoubleClickPlay={audioToggle}
           onToggleSearch={() => setSearchOpen((o) => !o)}
-          typographyOpen={typographyOpen}
-          onOpenTypography={(rect) => {
-            setStylePanelPos({
-              top: rect.top,
-              left: Math.min(window.innerWidth - 300, rect.right + 8),
-            });
-            setTypographyOpen((o) => !o);
-          }}
+          theme={theme}
+          onToggleTheme={() => setTheme(theme === "light" ? "dark" : "light")}
         />
 
         {chaptersOpen && (
@@ -334,7 +339,7 @@ export default function Reader({ book }: { book: BookDocument }) {
             orderedSections={orderedSections}
             notesIndexSectionId={notesIndexSectionId}
             notesIndexGroups={notesIndexGroups}
-            isHighlighted={isHighlighted}
+            getAnnotations={getAnnotations}
             isListen={isListen}
             currentPlayingPassageId={currentPlayingPassageId}
             currentWordIndex={currentWordIndex}
@@ -346,74 +351,69 @@ export default function Reader({ book }: { book: BookDocument }) {
             onWordClick={handleWordClick}
             seekToPassageForListening={seekToPassageForListening}
             onTextSelect={onTextSelect}
-            setActivePassageId={setActivePassageId}
-            setSidebarOpen={setSidebarOpen}
-            setSidebarMode={setSidebarMode}
+            onNoteMarkerClick={onNoteMarkerClick}
+            onOpenPassageNotes={onOpenPassageNotes}
           />
 
           {/* Selection menu is a fixed-position overlay, so it doesn't need
               to live inside BookContent's scrollable tree; keeping it here
               means selecting text never forces the (memoized) book content
-              to re-render. */}
-          {selMenu.open && (
+              to re-render. Selecting text is the *only* way to start a
+              highlight/note/copy (per product decision) — there's no
+              separate click-based menu on already-marked text. */}
+          {selection && (
             <SelectionMenu
-              top={selMenu.top}
-              left={selMenu.left}
+              top={selection.top}
+              left={selection.left}
+              theme={theme}
               copyLabel={copyLabel}
               onPlay={
                 hasNarration
                   ? () => {
-                      if (activePassageId) {
-                        const sectionId = passageLookup.sectionOf.get(activePassageId);
-                        if (sectionId) {
-                          setMode("listen");
-                          seekToPassageForListening(sectionId, activePassageId);
-                        }
+                      const passageId = selection.ranges[0].passageId;
+                      const sectionId = passageLookup.sectionOf.get(passageId);
+                      if (sectionId) {
+                        setMode("listen");
+                        seekToPassageForListening(sectionId, passageId);
                       }
-                      setSelMenu((s) => ({ ...s, open: false }));
+                      dismissSelection();
                     }
                   : undefined
               }
-              onHighlight={() => {
-                if (activePassageId) toggleHighlight(book.id, activePassageId);
-                setSelMenu((s) => ({ ...s, open: false }));
-              }}
-              onNote={() => {
-                setSidebarOpen(true);
-                setSidebarMode("add");
-                setSelMenu((s) => ({ ...s, open: false }));
-              }}
-              onShare={() => setSelMenu((s) => ({ ...s, open: false }))}
+              onHighlight={highlightSelection}
+              onNote={noteFromSelection}
               onCopy={menuCopy}
-              onDismiss={() => setSelMenu((s) => ({ ...s, open: false }))}
+              onDismiss={dismissSelection}
             />
           )}
 
-          {typographyOpen && (
-            <>
-              <div onClick={() => setTypographyOpen(false)} className="fixed inset-0 bg-black/20 z-24" />
-              <StylePanel
-                className="fixed z-25"
-                style={{ top: stylePanelPos.top, left: stylePanelPos.left }}
-                onClose={() => setTypographyOpen(false)}
-              />
-            </>
-          )}
-
-          {sidebarOpen && (
+          {notesPanel && (
             <>
               <div
-                onClick={() => setSidebarOpen(false)}
+                onClick={closeNotesPanel}
                 className={`absolute inset-0 z-39 ${isMobile ? "bg-black/45" : "bg-black/25"}`}
               />
               <div
                 className={`absolute top-0 bottom-0 z-40 ${isMobile ? "left-0 w-full" : "right-0 w-95"}`}
               >
                 <NotesSidebar
-                  mode={sidebarMode}
+                  bookId={book.id}
+                  passageId={notesPanel.passageId}
+                  getPassageText={getPassageText}
+                  mode={notesPanel.mode}
+                  annotationId={notesPanel.mode === "edit" ? notesPanel.annotationId : undefined}
+                  pendingRanges={notesPanel.mode === "edit" ? notesPanel.ranges : undefined}
+                  editingNoteId={notesPanel.mode === "edit" ? notesPanel.editingNoteId : undefined}
                   panelType={isMobile ? "sheet" : "side"}
-                  passageText={activePassage?.text}
-                  onClose={() => setSidebarOpen(false)}
+                  citation={
+                    currentSectionLabel
+                      ? `${book.metadata.title} · ${currentSectionLabel}`
+                      : book.metadata.title
+                  }
+                  onEditAnnotation={(annotationId, noteId) =>
+                    onEditAnnotation(notesPanel.passageId, annotationId, noteId)
+                  }
+                  onClose={closeNotesPanel}
                 />
               </div>
             </>

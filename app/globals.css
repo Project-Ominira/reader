@@ -72,15 +72,18 @@ body {
    doesn't require touching any consumer.
 
    --reader-active-word-bg/text is the *currently narrated word* during
-   listen mode (PassageContent.tsx) — light theme runs this as the same
-   burnt-orange used for the player's play button/progress bar
-   (--color-brand-500), so "this is the word playing right now" reads as
-   the same accent as the rest of the audio chrome. --reader-word-hover-*
-   is the lighter preview shown when hovering any *other* word (deliberately
-   a paler tint of the same hue, not the same solid color, so hovering
-   never gets confused with the one word actually being read aloud). Both
-   stay a separate concept from --reader-highlight (the reader's own saved
-   highlight). */
+   listen mode (PassageContent.tsx) — a cool steel-blue, deliberately nowhere
+   near the warm brand-terracotta used for --reader-highlight, so "this is
+   the one word playing right now" (a solid, high-contrast chip that jumps
+   word to word) is never confused with "I highlighted this" (a soft
+   background wash the reader chose themselves). White text on the chip in
+   both themes, so it never blends into either page. There is no passage-
+   level "now playing" wash anymore (per product decision, note-redesign.md
+   round 2) — narration highlighting is word-level only; the rest of the
+   sentence stays plain. --reader-word-hover-* is the lighter preview shown
+   when hovering any *other* word (a paler tint of --reader-highlight's warm
+   hue, not the cool now-playing blue — hovering a word you might click is a
+   different concept from the one actually being read aloud). */
 [data-reader-theme="light"] {
   --reader-bg: #ffffff;
   /* Slightly off-white — pure white bg with pure white surfaces gave every
@@ -97,8 +100,9 @@ body {
   --reader-text-muted: #6e6e73;
   --reader-text-subtle: #a1a1a6;
   --reader-highlight: var(--color-highlight);
+  --reader-highlight-border: var(--color-brand-400);
   --reader-note-accent: var(--color-brand-500);
-  --reader-active-word-bg: var(--color-brand-500);
+  --reader-active-word-bg: #3d6fa8;
   --reader-active-word-text: #ffffff;
   --reader-word-hover-bg: var(--color-brand-100);
   --reader-word-hover-text: var(--color-brand-700);
@@ -113,19 +117,12 @@ body {
   --reader-text-muted: #98989d;
   --reader-text-subtle: #636366;
   --reader-highlight: rgba(226, 140, 96, 0.16);
+  --reader-highlight-border: var(--color-brand-400);
   --reader-note-accent: var(--color-brand-300);
-  --reader-active-word-bg: rgba(226, 140, 96, 0.22);
-  --reader-active-word-text: #f5f5f5;
+  --reader-active-word-bg: #4a7fbd;
+  --reader-active-word-text: #ffffff;
   --reader-word-hover-bg: rgba(226, 140, 96, 0.1);
   --reader-word-hover-text: #f5f5f5;
-}
-
-/* Fixed (non-themed) "currently narrated passage" wash — see comment above
-   for why this deliberately isn't an 8-variant token like the others. No
-   border companion token (per product decision: passage-level treatments
-   are background-only, never a bordered box). */
-:root {
-  --reader-listen-wash: rgba(76, 126, 168, 0.09);
 }
 
 /* Hover-preview for any narratable word (PassageContent.tsx) — a paler tint
@@ -174,4 +171,23 @@ body {
 }
 .reader-fade-in {
   animation: reader-fade-in 150ms ease;
+}
+
+/* Selection tooltip's entrance (note-redesign.md) — fade + a slight rise
+   from the selection midpoint. No matching exit animation: this project has
+   no animation library, and every other reader popover (footnote, notes
+   panel) already unmounts instantly, so the tooltip matches that instead of
+   being the one inconsistent exception. */
+@keyframes reader-menu-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.reader-menu-in {
+  animation: reader-menu-in 140ms ease;
 }

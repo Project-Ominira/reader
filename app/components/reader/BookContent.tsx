@@ -1,9 +1,10 @@
 "use client";
 
 import { memo } from "react";
-import { ChevronLeft, ChevronRight, MessageCircle } from "lucide-react";
+import { ChevronLeft, ChevronRight, Highlighter, MessageSquare } from "lucide-react";
 import { ImagePassageBlock, PassageText, type NoteLookup } from "../PassageContent";
 import type { BookDocument, Passage, Section } from "@/lib/book/schema";
+import type { Annotation } from "@/stores/library-store";
 import { sectionLabel } from "@/lib/reader/sectionHeading";
 
 // How much larger than body text each heading level renders — h1 down to
@@ -29,7 +30,7 @@ type BookContentProps = {
   orderedSections: Section[];
   notesIndexSectionId: string | null;
   notesIndexGroups: { heading: Passage; notes: BookDocument["notes"] }[] | null;
-  isHighlighted: (bookId: string, passageId: string) => boolean;
+  getAnnotations: (passageId: string) => Annotation[];
   isListen: boolean;
   currentPlayingPassageId: string | undefined;
   currentWordIndex: number | undefined;
@@ -40,10 +41,16 @@ type BookContentProps = {
   onNoteClick: (note: NoteLookup, target: HTMLElement) => void;
   onWordClick: (passageId: string, wordIndex: number) => void;
   seekToPassageForListening: (sectionId: string, passageId: string) => void;
-  onTextSelect: (passageId: string) => void;
-  setActivePassageId: (id: string) => void;
-  setSidebarOpen: (open: boolean) => void;
-  setSidebarMode: (mode: "thread" | "add") => void;
+  /** Fires on the *section's* own mouseup (not per-passage) so a drag that
+   * crosses paragraph boundaries is captured as one selection. */
+  onTextSelect: (sectionEl: HTMLElement) => void;
+  /** A plain click on a noted range or its remaining underline — opens
+   * that one note directly. Highlight-only ranges get no click handler. */
+  onNoteMarkerClick: (passageId: string, annotationId: string) => void;
+  /** The gutter marker — opens every note on this passage at once (a
+   * passage can hold several independent ranges), distinct from clicking
+   * one range inline via onNoteMarkerClick above. */
+  onOpenPassageNotes: (passageId: string) => void;
 };
 
 /**
@@ -75,7 +82,7 @@ const BookContent = memo(function BookContent({
   orderedSections,
   notesIndexSectionId,
   notesIndexGroups,
-  isHighlighted,
+  getAnnotations,
   isListen,
   currentPlayingPassageId,
   currentWordIndex,
@@ -87,9 +94,8 @@ const BookContent = memo(function BookContent({
   onWordClick,
   seekToPassageForListening,
   onTextSelect,
-  setActivePassageId,
-  setSidebarOpen,
-  setSidebarMode,
+  onNoteMarkerClick,
+  onOpenPassageNotes,
 }: BookContentProps) {
   const firstSectionId = orderedSections[0]?.id;
   const section = orderedSections[activeIndex];
@@ -114,6 +120,7 @@ const BookContent = memo(function BookContent({
         ref={registerSlide(section.id)}
         data-section-id={section.id}
         onClick={onAnyClick}
+        onMouseUp={(e) => onTextSelect(e.currentTarget)}
         className="reader-fade-in om-scroll h-full overflow-y-auto relative"
         style={{ background: "var(--reader-bg)" }}
       >
@@ -164,102 +171,99 @@ const BookContent = memo(function BookContent({
                 </div>
               ))
             : section.passages.map((raw) => {
-                const p = { ...raw, highlighted: isHighlighted(book.id, raw.id) };
-                const isHeading = p.type === "heading";
-                // The "currently narrated" wash is deliberately a
-                // separate concept from a user's own saved
-                // highlight above (reader-issues.md) — a steel-
-                // blue background, nowhere near the brand-
-                // terracotta highlight color, so the two are
-                // never visually confused. Neither gets a border
-                // (per product decision: a highlight is just the
-                // color plus an underline, not a bordered box) —
-                // highlight wins the background, and only it gets
-                // the underline, when a passage happens to be
-                // both at once.
-                const isNarrating = isListen && p.id === currentPlayingPassageId;
-                const headingBump = isPartDivider ? 14 : headingFontBump(p.level);
+                const annotations = getAnnotations(raw.id);
+                const hasNote = annotations.some((a) => a.notes.length > 0);
+                const noteCount = annotations.reduce((sum, a) => sum + a.notes.length, 0);
+                const isHeading = raw.type === "heading";
+                const headingBump = isPartDivider ? 14 : headingFontBump(raw.level);
+
+                const passageText = (
+                  <p
+                    onClick={() => {
+                      if (!isListen) return;
+                      // Don't hijack an in-progress text
+                      // selection (highlight/note gesture) —
+                      // only treat a plain click as "narrate
+                      // from here".
+                      const sel = window.getSelection();
+                      if (sel && !sel.isCollapsed && sel.toString().trim()) return;
+                      seekToPassageForListening(section.id, raw.id);
+                    }}
+                    className={`m-0 font-serif rounded-xs ${isListen ? "cursor-pointer" : ""}`}
+                    style={{
+                      ...(isHeading
+                        ? {
+                            fontFamily: fontFamilyVar,
+                            fontWeight: 700,
+                            fontSize: fontSize + headingBump,
+                            lineHeight: 1.3,
+                            textAlign: isPartDivider ? "center" : "left",
+                            textTransform: isPartDivider ? "uppercase" : "none",
+                            letterSpacing: isPartDivider ? "0.08em" : "normal",
+                            color: "var(--reader-text)",
+                          }
+                        : {
+                            font: `400 ${fontSize}px/${lineHeight} ${fontFamilyVar}`,
+                            color: "var(--reader-text)",
+                          }),
+                    }}
+                  >
+                    <PassageText
+                      passage={raw}
+                      notesById={notesById}
+                      onNoteClick={onNoteClick}
+                      annotations={annotations}
+                      onNoteMarkerClick={(annotationId) => onNoteMarkerClick(raw.id, annotationId)}
+                      activeWordIndex={raw.id === currentPlayingPassageId ? currentWordIndex : undefined}
+                      onWordClick={isListen ? onWordClick : undefined}
+                    />
+                  </p>
+                );
+
                 return (
                   <div
-                    key={p.id}
-                    data-passage-id={p.id}
-                    className="group relative"
+                    key={raw.id}
+                    data-passage-id={raw.id}
+                    data-passage-type={raw.type}
                     style={{
                       marginTop: isHeading ? (isPartDivider ? 56 : 32) : 0,
                       marginBottom: `${((24 * lineHeight) / 1.7).toFixed(0)}px`,
                     }}
                   >
-                    {p.type === "image" ? (
-                      <ImagePassageBlock passage={p} />
+                    {raw.type === "image" ? (
+                      <ImagePassageBlock passage={raw} />
+                    ) : isHeading || annotations.length === 0 ? (
+                      // No gutter marker on headings (a centered, all-caps
+                      // part divider would read as broken with an
+                      // asymmetric left gutter) or on a passage with
+                      // nothing marked yet — selecting text is the only way
+                      // to start a highlight/note (per product decision),
+                      // so there's no "you could add one here" affordance
+                      // to surface ahead of time. Still selectable via the
+                      // tooltip like any passage.
+                      passageText
                     ) : (
-                      <>
+                      // Absolutely positioned so it never pushes the
+                      // paragraph itself inward — hangs in the left margin
+                      // instead of consuming layout space the way an inline
+                      // flex column would.
+                      <div className="relative">
                         <button
-                          onClick={() => {
-                            setActivePassageId(p.id);
-                            setSidebarOpen(true);
-                            setSidebarMode("thread");
-                          }}
-                          title="Discuss this passage"
-                          className={`absolute -top-1 right-0 w-6 h-6 rounded-sm border-none flex items-center justify-center cursor-pointer bg-transparent transition-opacity ${
-                            p.highlighted
-                              ? "text-brand-500 opacity-100"
-                              : "text-[var(--reader-text-subtle)] opacity-0 group-hover:opacity-100"
+                          onClick={() => onOpenPassageNotes(raw.id)}
+                          title={hasNote ? "View notes on this passage" : "Highlighted"}
+                          className={`absolute top-0.5 -left-7 cursor-pointer flex items-center justify-center flex-none border-none text-brand-600 ${
+                            hasNote ? "w-5.5 h-5.5 rounded-sm bg-brand-100" : "w-5 h-5 rounded-full bg-brand-100"
                           }`}
                         >
-                          <MessageCircle size={15} />
+                          {hasNote ? <MessageSquare size={12} /> : <Highlighter size={11} />}
+                          {noteCount > 0 && (
+                            <span className="absolute -top-1.5 -right-1.5 min-w-3.5 h-3.5 px-0.5 rounded-full bg-brand-500 text-[8px] font-semibold leading-none text-white flex items-center justify-center">
+                              {noteCount}
+                            </span>
+                          )}
                         </button>
-                        <p
-                          onMouseUp={() => onTextSelect(p.id)}
-                          onClick={() => {
-                            if (!isListen) return;
-                            // Don't hijack an in-progress text
-                            // selection (highlight/note gesture) —
-                            // only treat a plain click as "narrate
-                            // from here".
-                            const sel = window.getSelection();
-                            if (sel && !sel.isCollapsed && sel.toString().trim()) return;
-                            seekToPassageForListening(section.id, p.id);
-                          }}
-                          className={`m-0 font-serif rounded-xs ${isListen ? "cursor-pointer" : ""} ${
-                            p.highlighted || isNarrating ? "py-2 px-3 -mx-3" : "p-0"
-                          }`}
-                          style={{
-                            background: p.highlighted
-                              ? "var(--reader-highlight)"
-                              : isNarrating
-                              ? "var(--reader-listen-wash)"
-                              : undefined,
-                            textDecorationLine: p.highlighted ? "underline" : undefined,
-                            textDecorationThickness: p.highlighted ? "1px" : undefined,
-                            textUnderlineOffset: p.highlighted ? "3px" : undefined,
-                            ...(isHeading
-                              ? {
-                                  fontFamily: fontFamilyVar,
-                                  fontWeight: 700,
-                                  fontSize: fontSize + headingBump,
-                                  lineHeight: 1.3,
-                                  textAlign: isPartDivider ? "center" : "left",
-                                  textTransform: isPartDivider ? "uppercase" : "none",
-                                  letterSpacing: isPartDivider ? "0.08em" : "normal",
-                                  color: "var(--reader-text)",
-                                }
-                              : {
-                                  font: `400 ${fontSize}px/${lineHeight} ${fontFamilyVar}`,
-                                  color: "var(--reader-text)",
-                                }),
-                          }}
-                        >
-                          <PassageText
-                            passage={raw}
-                            notesById={notesById}
-                            onNoteClick={onNoteClick}
-                            activeWordIndex={
-                              p.id === currentPlayingPassageId ? currentWordIndex : undefined
-                            }
-                            onWordClick={isListen ? onWordClick : undefined}
-                          />
-                        </p>
-                      </>
+                        {passageText}
+                      </div>
                     )}
                   </div>
                 );

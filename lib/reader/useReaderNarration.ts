@@ -1,8 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { BookDocument, Narrator, Passage, Section } from "@/lib/book/schema";
-import { useReaderStore } from "@/stores/reader-store";
 import { useAudioStore } from "@/stores/audio-store";
-import { usePositionStore } from "@/stores/position-store";
+import { useLibraryStore } from "@/stores/library-store";
 import { activeLineIndex, activeWordIndex, buildKaraokeLines, type KaraokeLine } from "@/lib/audio/karaoke";
 
 export type NarratorOption = Narrator;
@@ -39,8 +38,7 @@ export function useReaderNarration({
   const hasNarration = book.narrators.length > 0;
   const isListen = mode === "listen" && hasNarration;
 
-  const audioSectionId = useReaderStore((s) => s.currentSectionId);
-  const setAudioSectionId = useReaderStore((s) => s.setCurrentSectionId);
+  const audioSectionId = useLibraryStore((s) => s.books[book.id]?.position?.sectionId);
 
   const audioPlaying = useAudioStore((s) => s.isPlaying);
   const audioPlay = useAudioStore((s) => s.play);
@@ -48,24 +46,15 @@ export function useReaderNarration({
   const audioSeekTo = useAudioStore((s) => s.seekTo);
   const audioPause = useAudioStore((s) => s.pause);
   const audioCurrentTimeMs = useAudioStore((s) => s.currentTimeMs);
-  const storeNarratorId = useAudioStore((s) => s.narratorId);
-  const setNarratorId = useAudioStore((s) => s.setNarratorId);
 
-  const getPosition = usePositionStore((s) => s.getPosition);
-  const setPosition = usePositionStore((s) => s.setPosition);
+  const getPosition = useLibraryStore((s) => s.getPosition);
+  const setPosition = useLibraryStore((s) => s.setPosition);
 
-  // The store's narratorId starts empty — seed it with this book's first
-  // narrator the first time it doesn't match one of this book's own, so a
-  // listen session always has a real voice selected.
-  useEffect(() => {
-    if (hasNarration && !book.narrators.some((n) => n.id === storeNarratorId)) {
-      setNarratorId(book.narrators[0].id);
-    }
-  }, [hasNarration, book.narrators, storeNarratorId, setNarratorId]);
-  const narratorId =
-    hasNarration && book.narrators.some((n) => n.id === storeNarratorId)
-      ? storeNarratorId
-      : book.narrators[0]?.id;
+  // One narration per book for now (per product decision) — always the
+  // book's first narrator, no switching UI. audio-store's narratorId/
+  // setNarratorId fields stay shelved (unused here) for when multi-narrator
+  // selection is re-enabled.
+  const narratorId = book.narrators[0]?.id;
 
   const audioSection =
     sectionsById.get(audioSectionId ?? book.spine[0]) ?? sectionsById.get(book.spine[0])!;
@@ -97,6 +86,12 @@ export function useReaderNarration({
     if (mode !== "listen" || !usesRecordedAudio) return;
     const stored = getPosition(book.id);
     if (!stored || stored.sectionId !== audioSection.id) return;
+    // Prefer the exact moment last heard, when one was saved; otherwise the
+    // best available granularity is the resume passage's first word.
+    if (stored.audioTimeMs !== undefined) {
+      audioSeekTo(stored.audioTimeMs);
+      return;
+    }
     const resumePassageId = audioSection.passages[stored.passageIndex]?.id;
     const word = audioSection.audio?.words?.find((w) => w.passageId === resumePassageId);
     if (word) audioSeekTo(word.startMs);
@@ -119,8 +114,7 @@ export function useReaderNarration({
       audioPause();
       return;
     }
-    setAudioSectionId(nextId);
-    setPosition(book.id, { sectionId: nextId, passageIndex: 0 });
+    setPosition(book.id, { sectionId: nextId, passageIndex: 0, audioTimeMs: 0 });
     audioSeekTo(0);
     if (isFollowingNarration) goTo(idx + 1, { animate: true });
   }, [
@@ -132,7 +126,6 @@ export function useReaderNarration({
     book.spine,
     book.id,
     audioPause,
-    setAudioSectionId,
     setPosition,
     audioSeekTo,
     isFollowingNarration,
@@ -181,7 +174,8 @@ export function useReaderNarration({
     if (mode !== "listen" || !usesRecordedAudio || !currentKaraokeLine) return;
     const passageId = currentKaraokeLine.words[0]?.passageId;
     const passageIndex = audioSection.passages.findIndex((p) => p.id === passageId);
-    if (passageIndex >= 0) setPosition(book.id, { sectionId: audioSection.id, passageIndex });
+    if (passageIndex >= 0)
+      setPosition(book.id, { sectionId: audioSection.id, passageIndex, audioTimeMs: audioCurrentTimeMs });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mode, usesRecordedAudio, currentKaraokeLine, audioSection.id]);
 
@@ -195,14 +189,14 @@ export function useReaderNarration({
       const targetSection = sectionsById.get(sectionId);
       const targetTrack = targetSection?.audio?.narratorTracks.find((t) => t.narratorId === narratorId);
       if (!targetSection || !targetTrack) return;
-      setAudioSectionId(sectionId);
       const passageIndex = targetSection.passages.findIndex((p) => p.id === passageId);
-      if (passageIndex >= 0) setPosition(book.id, { sectionId, passageIndex });
       const word = (targetSection.audio?.words ?? []).find((w) => w.passageId === passageId);
+      if (passageIndex >= 0)
+        setPosition(book.id, { sectionId, passageIndex, audioTimeMs: word?.startMs ?? 0 });
       audioSeekTo(word?.startMs ?? 0);
       audioPlay();
     },
-    [sectionsById, narratorId, setAudioSectionId, setPosition, book.id, audioSeekTo, audioPlay]
+    [sectionsById, narratorId, setPosition, book.id, audioSeekTo, audioPlay]
   );
 
   // Click-a-specific-word-to-narrate-from-there — the word-granularity
@@ -215,13 +209,12 @@ export function useReaderNarration({
       if (!sectionId || !targetSection || !targetTrack) return;
       const passageIndex = targetSection.passages.findIndex((p) => p.id === passageId);
       if (passageIndex < 0) return;
-      setAudioSectionId(sectionId);
-      setPosition(book.id, { sectionId, passageIndex });
       const word = (targetSection.audio?.words ?? []).filter((w) => w.passageId === passageId)[wordIndex];
+      setPosition(book.id, { sectionId, passageIndex, audioTimeMs: word?.startMs ?? 0 });
       if (word) audioSeekTo(word.startMs);
       audioPlay();
     },
-    [passageLookup, sectionsById, narratorId, setAudioSectionId, setPosition, book.id, audioSeekTo, audioPlay]
+    [passageLookup, sectionsById, narratorId, setPosition, book.id, audioSeekTo, audioPlay]
   );
 
   const handleSeek = useCallback((ms: number) => audioSeekTo(Math.max(0, ms)), [audioSeekTo]);

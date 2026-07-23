@@ -2,25 +2,18 @@
 
 import { memo } from "react";
 import type { Mark, Passage } from "@/lib/book/schema";
+import type { Annotation } from "@/stores/library-store";
 
 export type NoteLookup = { id: string; marker: string; text: string };
 
-type Segment = { text: string; mark?: Mark; wordIndex?: number };
+type Segment = {
+  text: string;
+  mark?: Mark;
+  wordIndex?: number;
+  annotationId?: string;
+};
 type WordRange = { start: number; end: number };
-
-function splitByMarks(text: string, marks: Mark[] | undefined): Segment[] {
-  if (!marks || marks.length === 0) return [{ text }];
-  const sorted = [...marks].sort((a, b) => a.start - b.start);
-  const segments: Segment[] = [];
-  let cursor = 0;
-  for (const mark of sorted) {
-    if (mark.start > cursor) segments.push({ text: text.slice(cursor, mark.start) });
-    segments.push({ text: text.slice(mark.start, mark.end), mark });
-    cursor = mark.end;
-  }
-  if (cursor < text.length) segments.push({ text: text.slice(cursor) });
-  return segments;
-}
+type LocalAnnotation = { id: string; start: number; end: number; highlighted: boolean; hasNote: boolean };
 
 function computeWordRanges(text: string): WordRange[] {
   const ranges: WordRange[] = [];
@@ -32,11 +25,16 @@ function computeWordRanges(text: string): WordRange[] {
   return ranges;
 }
 
-/** Splits text into pieces fine-grained enough to carry both mark formatting
- * (em/strong/note) and a word index for audio-sync highlighting (reader-issues
- * #7) — cutting at the union of mark and word boundaries so neither one ever
- * splits a piece the other needs whole. */
-function tokenizeWithWords(text: string, marks: Mark[] | undefined, words: WordRange[]): Segment[] {
+/** Cuts passage text at the union of every mark, word, and user-annotation
+ * boundary, so none of the three ever splits a piece another one needs
+ * whole — a highlighted range spanning two marked words still renders as
+ * one wrapped span internally made of the right em/strong/word pieces. */
+function buildSegments(
+  text: string,
+  marks: Mark[] | undefined,
+  words: WordRange[],
+  annotations: LocalAnnotation[]
+): Segment[] {
   const cuts = new Set<number>([0, text.length]);
   const sortedMarks = marks ? [...marks].sort((a, b) => a.start - b.start) : [];
   for (const mark of sortedMarks) {
@@ -47,6 +45,10 @@ function tokenizeWithWords(text: string, marks: Mark[] | undefined, words: WordR
     cuts.add(word.start);
     cuts.add(word.end);
   }
+  for (const a of annotations) {
+    cuts.add(a.start);
+    cuts.add(a.end);
+  }
   const points = Array.from(cuts).sort((a, b) => a - b);
   const tokens: Segment[] = [];
   for (let i = 0; i < points.length - 1; i++) {
@@ -55,18 +57,23 @@ function tokenizeWithWords(text: string, marks: Mark[] | undefined, words: WordR
     if (start === end) continue;
     const mark = sortedMarks.find((m) => m.start <= start && end <= m.end);
     const wordIdx = words.findIndex((w) => w.start <= start && end <= w.end);
-    tokens.push({ text: text.slice(start, end), mark, wordIndex: wordIdx >= 0 ? wordIdx : undefined });
+    const annotation = annotations.find((a) => a.start <= start && end <= a.end);
+    tokens.push({
+      text: text.slice(start, end),
+      mark,
+      wordIndex: wordIdx >= 0 ? wordIdx : undefined,
+      annotationId: annotation?.id,
+    });
   }
   return tokens;
 }
 
 // Theme-fitting active-narration-word highlight (reader-issues.md) —
 // --reader-active-word-bg/text are per-theme tokens (app/globals.css), so
-// this reads correctly across all 8 themes instead of a single hardcoded
-// color. Deliberately separate from --reader-highlight (the user's own
-// saved-highlight color) so "this is just what's playing" is never
-// visually confused with "I highlighted this". Padding is marginal but
-// present, per the request that this not look like a bare color swap.
+// this reads correctly in both themes instead of a single hardcoded color.
+// Deliberately a cool blue, nowhere near --reader-highlight's warm
+// terracotta, so "this is just what's playing" is never visually confused
+// with "I highlighted this."
 const ACTIVE_WORD_STYLE: React.CSSProperties = {
   background: "var(--reader-active-word-bg)",
   color: "var(--reader-active-word-text)",
@@ -74,7 +81,7 @@ const ACTIVE_WORD_STYLE: React.CSSProperties = {
   padding: "1px 2px",
 };
 
-function renderSegment(
+function renderLeaf(
   seg: Segment,
   key: number,
   notesById: Map<string, NoteLookup>,
@@ -128,6 +135,17 @@ type PassageTextProps = {
   passage: Passage;
   notesById: Map<string, NoteLookup>;
   onNoteClick: (note: NoteLookup, target: HTMLElement) => void;
+  /** User highlights/notes touching this passage — range-scoped (a reader
+   * can mark a single word or a whole sentence, not just the entire
+   * passage, and a mark can span into neighboring passages too), rendered
+   * as wrapping spans around the underlying mark/word tokens. */
+  annotations: Annotation[];
+  /** Fired for a plain click (not a fresh drag-selection) landing on a
+   * *noted* range or its remaining underline — opens that note directly.
+   * Highlight-only ranges get no click handler at all: selecting the same
+   * text again and using the tooltip is the only way to remove a highlight
+   * or add a note to it (per product decision — no separate click menu). */
+  onNoteMarkerClick: (annotationId: string) => void;
   /** Word index currently being narrated, for inline audio-sync highlighting
    * in the reading view itself (reader-issues #7) — omit outside listen mode. */
   activeWordIndex?: number;
@@ -141,36 +159,90 @@ type PassageTextProps = {
   onWordClick?: (passageId: string, wordIndex: number) => void;
 };
 
-/** Renders a passage's plain text with its marks applied — em/strong styling
- * and clickable footnote-reference glyphs (reader-issues #3). Marks are
- * assumed non-overlapping, matching how ingestion produces them.
+/** Renders a passage's plain text with its ingested marks (em/strong/
+ * footnote) and the reader's own highlights/notes applied — both are
+ * additive layers cut into the same underlying plain string, never HTML.
  *
  * Wrapped in memo(): with the whole book mounted at once (reader-issues.md
- * — no notion of pages), word-level tokenization now runs for every passage
- * rather than just the one being narrated. Reader.tsx passes a stable
- * `passage` reference (the book's own object, not a per-render copy) and a
- * stable onWordClick/onNoteClick, so on the ~2.6/s re-renders during
- * playback this skips re-tokenizing every passage that isn't the one
- * actually changing (the currently-narrated one). */
+ * — no notion of pages), tokenization now runs for every passage rather
+ * than just the one being narrated or annotated. Reader.tsx passes stable
+ * references for `passage`/`annotations` and stable callbacks, so on the
+ * ~2.6/s re-renders during playback this skips re-tokenizing every passage
+ * that isn't the one actually changing. */
 export const PassageText = memo(function PassageText({
   passage,
   notesById,
   onNoteClick,
+  annotations,
+  onNoteMarkerClick,
   activeWordIndex,
   onWordClick,
 }: PassageTextProps) {
-  const segments =
-    activeWordIndex === undefined && !onWordClick
-      ? splitByMarks(passage.text, passage.marks)
-      : tokenizeWithWords(passage.text, passage.marks, computeWordRanges(passage.text));
-  const onSegmentWordClick = onWordClick
-    ? (wordIndex: number) => onWordClick(passage.id, wordIndex)
-    : undefined;
+  const words = activeWordIndex !== undefined || onWordClick ? computeWordRanges(passage.text) : [];
+  // An annotation carries one range per passage it touches — resolve each
+  // to its own local [start,end) here, since that's all buildSegments
+  // needs to know about for this one passage.
+  const localAnnotations: LocalAnnotation[] = [];
+  for (const a of annotations) {
+    const r = a.ranges.find((r) => r.passageId === passage.id);
+    if (r) localAnnotations.push({ id: a.id, start: r.start, end: r.end, highlighted: a.highlighted, hasNote: a.notes.length > 0 });
+  }
+  const segments = buildSegments(passage.text, passage.marks, words, localAnnotations);
+  const onSegmentWordClick = onWordClick ? (wordIndex: number) => onWordClick(passage.id, wordIndex) : undefined;
+
+  // Group consecutive same-annotation tokens into one wrapper span each —
+  // where the highlight background/underline actually gets painted (a
+  // range, not the whole passage), and the click target for a noted range.
+  const runs: { annotationId?: string; segs: Segment[] }[] = [];
+  for (const seg of segments) {
+    const last = runs[runs.length - 1];
+    if (last && last.annotationId === seg.annotationId) last.segs.push(seg);
+    else runs.push({ annotationId: seg.annotationId, segs: [seg] });
+  }
+
   return (
     <>
-      {segments.map((seg, i) =>
-        renderSegment(seg, i, notesById, onNoteClick, activeWordIndex, onSegmentWordClick)
-      )}
+      {runs.map((run, i) => {
+        const children = run.segs.map((seg, j) =>
+          renderLeaf(seg, j, notesById, onNoteClick, activeWordIndex, onSegmentWordClick)
+        );
+        if (!run.annotationId) return <span key={i}>{children}</span>;
+
+        const local = localAnnotations.find((a) => a.id === run.annotationId)!;
+        const handleClick = local.hasNote
+          ? (e: React.MouseEvent<HTMLSpanElement>) => {
+              // Don't hijack a fresh drag-selection that merely happens to
+              // end on top of this range.
+              const sel = window.getSelection();
+              if (sel && !sel.isCollapsed && sel.toString().trim()) return;
+              e.stopPropagation();
+              onNoteMarkerClick(local.id);
+            }
+          : undefined;
+
+        return (
+          <span
+            key={i}
+            data-annotation-id={local.id}
+            onClick={handleClick}
+            className={local.hasNote ? "cursor-pointer" : ""}
+            style={
+              local.highlighted
+                ? {
+                    background: "var(--reader-highlight)",
+                    borderBottom: "2px solid var(--reader-highlight-border)",
+                    padding: "0 1px",
+                  }
+                : {
+                    borderBottom: "2px dotted var(--reader-note-accent)",
+                    paddingBottom: 1,
+                  }
+            }
+          >
+            {children}
+          </span>
+        );
+      })}
     </>
   );
 });

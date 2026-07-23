@@ -1,8 +1,9 @@
 "use client";
 
 import Link from "next/link";
-import { ArrowLeft, BookOpen, CaseSensitive, Pause, Play, Search, Users } from "lucide-react";
+import { ArrowLeft, BookOpen, Moon, Pause, Play, Search, Sun, Users } from "lucide-react";
 import { READING_NOW_PLACEHOLDER } from "@/lib/reader/constants";
+import type { Theme } from "@/stores/reader-store";
 
 type Props = {
   visible: boolean;
@@ -21,8 +22,8 @@ type Props = {
   onToggleMode: () => void;
   onDoubleClickPlay: () => void;
   onToggleSearch: () => void;
-  typographyOpen: boolean;
-  onOpenTypography: (rect: DOMRect) => void;
+  theme: Theme;
+  onToggleTheme: () => void;
 };
 
 /**
@@ -48,8 +49,8 @@ export default function ReaderHeader({
   onToggleMode,
   onDoubleClickPlay,
   onToggleSearch,
-  typographyOpen,
-  onOpenTypography,
+  theme,
+  onToggleTheme,
 }: Props) {
   return (
     <div
@@ -90,10 +91,10 @@ export default function ReaderHeader({
         </div>
       </button>
 
-      <div className="flex items-center gap-1.5 text-xs font-medium text-[var(--reader-text-muted)] flex-none">
+      {/* <div className="flex items-center gap-1.5 text-xs font-medium text-[var(--reader-text-muted)] flex-none">
         <Users size={14} />
         {READING_NOW_PLACEHOLDER} reading now
-      </div>
+      </div> */}
 
       {hasNarration && (
         <button
@@ -117,13 +118,11 @@ export default function ReaderHeader({
       </button>
 
       <button
-        onClick={(e) => onOpenTypography(e.currentTarget.getBoundingClientRect())}
-        title="Typography"
-        className={`w-9 h-9 rounded-md border-none cursor-pointer flex items-center justify-center flex-none font-bold text-[15px] font-serif ${
-          typographyOpen ? "bg-brand-500/10 text-brand-500" : "bg-transparent text-[var(--reader-text)]"
-        }`}
+        onClick={onToggleTheme}
+        title={theme === "light" ? "Switch to dark theme" : "Switch to light theme"}
+        className="w-9 h-9 rounded-md border-none bg-transparent cursor-pointer flex items-center justify-center flex-none text-[var(--reader-text)]"
       >
-        <CaseSensitive size={18} />
+        {theme === "light" ? <Sun size={18} /> : <Moon size={18} />}
       </button>
     </div>
   );
