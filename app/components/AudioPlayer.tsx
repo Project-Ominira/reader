@@ -77,7 +77,7 @@ export default function AudioPlayer({
   const playSize = isMini ? "w-8.5 h-8.5" : "w-10.5 h-10.5";
 
   return (
-    <div className="w-full h-full box-border relative flex flex-col justify-center bg-[var(--reader-surface)] border-t border-[var(--reader-border)]">
+    <div className="w-full h-full box-border relative flex flex-col justify-center bg-[var(--reader-surface)] border-t border-[var(--reader-border)] pb-[env(safe-area-inset-bottom)]">
       {onClose && (
         <button
           onClick={onClose}

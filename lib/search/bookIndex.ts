@@ -15,7 +15,7 @@ export type SearchResult = {
   text: string;
 };
 
-function flattenSections(sections: Section[]): Section[] {
+export function flattenSections(sections: Section[]): Section[] {
   return sections.flatMap((s) => [s, ...flattenSections(s.children)]);
 }
 

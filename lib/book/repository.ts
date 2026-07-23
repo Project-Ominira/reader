@@ -1,4 +1,4 @@
-import { readdir, readFile } from "node:fs/promises";
+import { readdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { parseBookDocument, type BookDocument } from "./schema";
 
@@ -43,6 +43,19 @@ export async function getBookDocument(slug: string): Promise<BookDocument> {
     throw new BookValidationError(slug, parsed.error.message);
   }
   return parsed.data;
+}
+
+/**
+ * Persists a book back to its JSON fixture — used by the audio admin panel
+ * to write generated narration tracks in place. Validates before writing so
+ * a bad in-memory mutation can't corrupt the file on disk.
+ */
+export async function writeBookDocument(slug: string, doc: BookDocument): Promise<void> {
+  const parsed = parseBookDocument(doc);
+  if (!parsed.ok) {
+    throw new BookValidationError(slug, parsed.error.message);
+  }
+  await writeFile(path.join(BOOKS_DIR, `${slug}.json`), `${JSON.stringify(parsed.data, null, 2)}\n`, "utf-8");
 }
 
 /**

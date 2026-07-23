@@ -1,6 +1,7 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Source_Serif_4, Manrope, Literata } from "next/font/google";
 import "./globals.css";
+import ServiceWorkerRegistration from "./ServiceWorkerRegistration";
 
 // The wider reader font picker (app/fonts.ts) is defined but not loaded here
 // right now — only Literata (the current single reading-font default) is
@@ -26,6 +27,24 @@ const literata = Literata({
 export const metadata: Metadata = {
   title: "Ominira",
   description: "A reading and listening companion",
+  applicationName: "Ominira",
+  manifest: "/manifest.json",
+  appleWebApp: {
+    capable: true,
+    statusBarStyle: "default",
+    title: "Ominira",
+  },
+  other: {
+    // Next only emits the standardized `mobile-web-app-capable` tag; older
+    // iOS Safari (pre-17.4) only honors this legacy Apple-prefixed one for
+    // standalone (no-browser-chrome) launch from the home screen.
+    "apple-mobile-web-app-capable": "yes",
+  },
+};
+
+export const viewport: Viewport = {
+  themeColor: "#FAF6F0",
+  viewportFit: "cover",
 };
 
 export default function RootLayout({
@@ -45,7 +64,10 @@ export default function RootLayout({
       suppressHydrationWarning
       className={`${sourceSerif.variable} ${manrope.variable} ${literata.variable} h-full antialiased`}
     >
-      <body className="min-h-full flex flex-col font-sans">{children}</body>
+      <body className="min-h-full flex flex-col font-sans">
+        {children}
+        <ServiceWorkerRegistration />
+      </body>
     </html>
   );
 }
